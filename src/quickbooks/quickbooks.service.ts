@@ -594,7 +594,7 @@ export class QuickbooksService implements OnModuleInit {
    * Create a new customer
    */
   async createCustomer(customerData: QuickBooksCustomer): Promise<QuickBooksCustomer> {
-    const requestBody = this.formatCustomerRequestBody(customerData);
+    const requestBody = QuickBooksHelper.formatCustomerRequestBody(customerData);
     this.logger.debug(`Creating customer with body: ${JSON.stringify(requestBody)}`);
     const response = await this.makeRequest('post', `/v3/company/${this.realmId}/customer`, requestBody);
     return response.data.Customer || response.data;
@@ -614,40 +614,6 @@ export class QuickbooksService implements OnModuleInit {
     return response.data.Customer || response.data;
   }
 
-  /**
-   * Formats customer request body for QuickBooks API
-   */
-  private formatCustomerRequestBody(customerData: QuickBooksCustomer): any {
-    const requestBody: any = {
-      DisplayName: customerData.DisplayName,
-    };
-
-    if (customerData.PrimaryEmailAddr) {
-      requestBody.PrimaryEmailAddr = {
-        Address: typeof customerData.PrimaryEmailAddr === 'string'
-          ? customerData.PrimaryEmailAddr
-          : customerData.PrimaryEmailAddr.Address,
-      };
-    }
-
-    if (customerData.PrimaryPhone) {
-      requestBody.PrimaryPhone = {
-        FreeFormNumber: typeof customerData.PrimaryPhone === 'string'
-          ? customerData.PrimaryPhone
-          : customerData.PrimaryPhone.FreeFormNumber,
-      };
-    }
-
-    if (customerData.BillAddr) {
-      requestBody.BillAddr = customerData.BillAddr;
-    }
-
-    if (customerData.Notes) {
-      requestBody.Notes = customerData.Notes;
-    }
-
-    return requestBody;
-  }
 
   /**
    * Get all invoices
@@ -679,28 +645,7 @@ export class QuickbooksService implements OnModuleInit {
       throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
     }
 
-    // QuickBooks API expects invoice data directly (NOT wrapped)
-    // Format according to official documentation
-    const requestBody: any = {
-      CustomerRef: invoiceData.CustomerRef,
-      Line: invoiceData.Line.map((line: any, index: number) => ({
-        Amount: line.Amount,
-        DetailType: line.DetailType || 'SalesItemLineDetail',
-        ...(line.DetailType === 'SalesItemLineDetail' && line.SalesItemLineDetail && {
-          SalesItemLineDetail: {
-            ItemRef: line.SalesItemLineDetail.ItemRef,
-            ...(line.SalesItemLineDetail.Qty && { Qty: line.SalesItemLineDetail.Qty }),
-            ...(line.SalesItemLineDetail.UnitPrice && { UnitPrice: line.SalesItemLineDetail.UnitPrice }),
-          },
-        }),
-        ...(line.Description && { Description: line.Description }),
-        LineNum: line.LineNum || index + 1,
-      })),
-      ...(invoiceData.TxnDate && { TxnDate: invoiceData.TxnDate }),
-      ...(invoiceData.DueDate && { DueDate: invoiceData.DueDate }),
-      ...(invoiceData.DocNumber && { DocNumber: invoiceData.DocNumber }),
-    };
-
+    const requestBody = QuickBooksHelper.formatInvoiceRequestBody(invoiceData);
     this.logger.debug(`Creating invoice with body: ${JSON.stringify(requestBody)}`);
     const response = await this.makeRequest('post', `/v3/company/${this.realmId}/invoice`, requestBody);
     return response.data.Invoice || response.data;
@@ -764,20 +709,14 @@ export class QuickbooksService implements OnModuleInit {
    * Formats item request body for QuickBooks API
    */
   private async formatItemRequestBody(itemData: QuickBooksItem): Promise<any> {
-    const requestBody: any = {
-      Name: itemData.Name,
-      Type: itemData.Type,
-      ...(itemData.UnitPrice !== undefined && { UnitPrice: itemData.UnitPrice }),
-      ...(itemData.Description && { Description: itemData.Description }),
-      ...(itemData.Sku && { Sku: itemData.Sku }),
-    };
+    let incomeAccountRef, expenseAccountRef, assetAccountRef;
 
     if (itemData.Type === 'Service' || itemData.Type === 'NonInventory') {
       if (!itemData.IncomeAccountRef || (!itemData.IncomeAccountRef.value && !itemData.IncomeAccountRef.name)) {
         throw new HttpException('IncomeAccountRef is required for Service and NonInventory items', HttpStatus.BAD_REQUEST);
       }
 
-      requestBody.IncomeAccountRef = await this.resolveAccountRef(
+      incomeAccountRef = await this.resolveAccountRef(
         itemData.IncomeAccountRef,
         'Income',
         itemData.Type === 'Service' ? 'ServiceIncome' : 'SalesOfProductIncome',
@@ -789,15 +728,12 @@ export class QuickbooksService implements OnModuleInit {
         throw new HttpException('Income, Expense, and Asset account references are required for Inventory items', HttpStatus.BAD_REQUEST);
       }
 
-      requestBody.IncomeAccountRef = await this.resolveAccountRef(itemData.IncomeAccountRef, 'Income', 'SalesOfProductIncome');
-      requestBody.ExpenseAccountRef = await this.resolveAccountRef(itemData.ExpenseAccountRef, 'Cost of Goods Sold', 'SuppliesMaterialsCogs');
-      requestBody.AssetAccountRef = await this.resolveAccountRef(itemData.AssetAccountRef, 'Asset', 'Inventory');
-      requestBody.TrackQtyOnHand = true;
-      requestBody.QtyOnHand = itemData.QtyOnHand || 0;
-      requestBody.InvStartDate = itemData.InvStartDate || new Date().toISOString().split('T')[0];
+      incomeAccountRef = await this.resolveAccountRef(itemData.IncomeAccountRef, 'Income', 'SalesOfProductIncome');
+      expenseAccountRef = await this.resolveAccountRef(itemData.ExpenseAccountRef, 'Cost of Goods Sold', 'SuppliesMaterialsCogs');
+      assetAccountRef = await this.resolveAccountRef(itemData.AssetAccountRef, 'Asset', 'Inventory');
     }
 
-    return requestBody;
+    return QuickBooksHelper.formatItemRequestBody(itemData, incomeAccountRef, expenseAccountRef, assetAccountRef);
   }
 
   /**
