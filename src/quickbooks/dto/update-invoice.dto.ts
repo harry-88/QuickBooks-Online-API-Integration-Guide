@@ -19,6 +19,26 @@ export class UpdateInvoiceDto extends PartialType(CreateInvoiceDto) {
     @IsOptional()
     @IsBoolean()
     sparse?: boolean = true;
+
+    @ApiProperty({
+        example: 'EmailSent',
+        description: 'Email status of the invoice',
+        enum: ['NotSet', 'NeedToSend', 'EmailSent'],
+        required: false
+    })
+    @IsOptional()
+    @IsString()
+    EmailStatus?: 'NotSet' | 'NeedToSend' | 'EmailSent';
+
+    @ApiProperty({
+        example: 'PrintComplete',
+        description: 'Print status of the invoice',
+        enum: ['NotSet', 'NeedToPrint', 'PrintComplete'],
+        required: false
+    })
+    @IsOptional()
+    @IsString()
+    PrintStatus?: 'NotSet' | 'NeedToPrint' | 'PrintComplete';
 }
 
 export class VoidInvoiceDto {

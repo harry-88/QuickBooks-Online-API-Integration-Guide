@@ -16,10 +16,10 @@ import { QuickBooksHelper } from './utils/quickbooks.helper';
 
 export interface TokenStorage {
   access_token: string;
-  QUICKBOOKS_REFRESH_TOKEN: string;
+  refresh_token: string;
   realmId: string;
   expires_at?: Date;
-  QUICKBOOKS_REFRESH_TOKEN_issued_at?: Date; // Track when refresh token was issued
+  refresh_token_issued_at?: Date; // Track when refresh token was issued
 }
 
 @Injectable()
@@ -55,7 +55,7 @@ export class QuickbooksService implements OnModuleInit {
     });
 
     // Initialize from environment if available
-    this.refreshToken = this.configService.get<string>('QUICKBOOKS_QUICKBOOKS_REFRESH_TOKEN');
+    this.refreshToken = this.configService.get<string>('QUICKBOOKS_REFRESH_TOKEN');
     this.realmId = this.configService.get<string>('QUICKBOOKS_REALM_ID');
 
     if (this.refreshToken && this.realmId) {
@@ -144,7 +144,7 @@ export class QuickbooksService implements OnModuleInit {
         this.setAccessToken(
           tokenResponse.access_token,
           tokenResponse.realmId,
-          tokenResponse.QUICKBOOKS_REFRESH_TOKEN,
+          tokenResponse.refresh_token,
           tokenResponse.expires_in,
         );
       } catch (error) {
@@ -236,13 +236,13 @@ export class QuickbooksService implements OnModuleInit {
       this.setAccessToken(
         tokenData.access_token,
         tokenData.realmId,
-        tokenData.QUICKBOOKS_REFRESH_TOKEN,
+        tokenData.refresh_token,
         tokenData.expires_in,
       );
 
       return {
         access_token: tokenData.access_token,
-        QUICKBOOKS_REFRESH_TOKEN: tokenData.QUICKBOOKS_REFRESH_TOKEN,
+        refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
         token_type: tokenData.token_type,
         realmId: tokenData.realmId,
@@ -270,8 +270,8 @@ export class QuickbooksService implements OnModuleInit {
       const response = await axios.post(
         tokenUrl,
         new URLSearchParams({
-          grant_type: 'QUICKBOOKS_REFRESH_TOKEN',
-          QUICKBOOKS_REFRESH_TOKEN: refreshToken,
+          grant_type: 'refresh_token',
+          refresh_token: refreshToken,
         }),
         {
           headers: {
@@ -283,7 +283,7 @@ export class QuickbooksService implements OnModuleInit {
       );
 
       const tokenData = response.data;
-      const newRefreshToken = tokenData.QUICKBOOKS_REFRESH_TOKEN || refreshToken;
+      const newRefreshToken = tokenData.refresh_token || refreshToken;
       this.setAccessToken(
         tokenData.access_token,
         tokenData.realmId || this.realmId || '',
@@ -293,7 +293,7 @@ export class QuickbooksService implements OnModuleInit {
 
       return {
         access_token: tokenData.access_token,
-        QUICKBOOKS_REFRESH_TOKEN: newRefreshToken,
+        refresh_token: newRefreshToken,
         expires_in: tokenData.expires_in,
         token_type: tokenData.token_type,
         realmId: tokenData.realmId || this.realmId || '',

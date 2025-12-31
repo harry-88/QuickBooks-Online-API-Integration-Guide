@@ -59,10 +59,9 @@ export class QuickbooksController {
       },
     },
   })
-  @ApiResponse({ status: 400, description: 'Invalid refresh token' })
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
     const tokenResponse = await this.quickbooksService.refreshAccessToken(
-      refreshTokenDto.QUICKBOOKS_REFRESH_TOKEN,
+      refreshTokenDto.refresh_token,
     );
     return {
       ...tokenResponse,
@@ -106,7 +105,7 @@ export class QuickbooksController {
     this.quickbooksService.setAccessToken(
       tokenResponse.access_token,
       realmId,
-      tokenResponse.QUICKBOOKS_REFRESH_TOKEN,
+      tokenResponse.refresh_token,
       tokenResponse.expires_in,
     );
 
@@ -149,7 +148,7 @@ export class QuickbooksController {
     this.quickbooksService.setAccessToken(
       setTokenDto.access_token,
       setTokenDto.realmId,
-      setTokenDto.QUICKBOOKS_REFRESH_TOKEN,
+      setTokenDto.refresh_token,
     );
 
     const status = this.quickbooksService.getTokenStatus();

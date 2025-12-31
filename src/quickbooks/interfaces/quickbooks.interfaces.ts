@@ -1,6 +1,6 @@
 export interface QuickBooksTokenResponse {
     access_token: string;
-    QUICKBOOKS_REFRESH_TOKEN: string;
+    refresh_token: string;
     expires_in: number;
     token_type: string;
     realmId: string;
@@ -103,6 +103,8 @@ export interface QuickBooksInvoice {
     TotalAmt?: number;
     Balance?: number;
     sparse?: boolean;
+    EmailStatus?: 'NotSet' | 'NeedToSend' | 'EmailSent';
+    PrintStatus?: 'NotSet' | 'NeedToPrint' | 'PrintComplete';
 }
 
 export interface QuickBooksQueryResponse<T> {

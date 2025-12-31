@@ -27,7 +27,7 @@ export class RefreshTokenDto {
   })
   @IsString()
   @IsNotEmpty()
-  QUICKBOOKS_REFRESH_TOKEN: string;
+  refresh_token: string;
 }
 
 export class SetTokenDto {
@@ -54,6 +54,6 @@ export class SetTokenDto {
   })
   @IsOptional()
   @IsString()
-  QUICKBOOKS_REFRESH_TOKEN?: string;
+  refresh_token?: string;
 }
 
