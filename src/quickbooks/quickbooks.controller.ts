@@ -8,6 +8,7 @@ import {
   HttpCode,
   HttpStatus,
   UseInterceptors,
+  Patch,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -23,13 +24,15 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { CreateItemDto } from './dto/create-item.dto';
 import { UpdateInvoiceDto, VoidInvoiceDto } from './dto/update-invoice.dto';
+import { CreatePaymentDto } from './dto/create-payment.dto';
 import { ExchangeCodeDto, RefreshTokenDto, SetTokenDto } from './dto/token-management.dto';
 import { AuthTokenInterceptor } from './interceptors/auth-token.interceptor';
 import {
   QuickBooksCustomer,
   QuickBooksInvoice,
   QuickBooksItem,
-  QuickBooksPaginatedResponse
+  QuickBooksPaginatedResponse,
+  QuickBooksPayment
 } from './interfaces/quickbooks.interfaces';
 
 @ApiTags('QuickBooks')
@@ -440,7 +443,7 @@ export class QuickbooksController {
     return this.quickbooksService.voidInvoice(id, voidInvoiceDto.SyncToken);
   }
 
-  @Post('invoices/:id')
+  @Patch('invoices/:id')
   @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Update an invoice',
@@ -533,6 +536,51 @@ export class QuickbooksController {
   @ApiResponse({ status: 400, description: 'Invalid item data' })
   async createItem(@Body() createItemDto: CreateItemDto): Promise<QuickBooksItem> {
     return this.quickbooksService.createItem(createItemDto as unknown as QuickBooksItem);
+  }
+
+  @Post('invoices/:id/pay')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Mark an invoice as paid',
+    description: 'Creates a payment in QuickBooks and links it to the specified invoice.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'QuickBooks invoice ID',
+    example: '1',
+  })
+  @ApiBody({ type: CreatePaymentDto, required: false })
+  @ApiResponse({
+    status: 201,
+    description: 'Payment created and invoice marked as paid successfully',
+  })
+  async markAsPaid(
+    @Param('id') id: string,
+    @Body() createPaymentDto?: CreatePaymentDto,
+  ): Promise<QuickBooksPayment> {
+    // If full payment data is provided, ensure the first line links to the ID from the URL if TxnId is missing
+    if (createPaymentDto && createPaymentDto.TotalAmt) {
+      const paymentData = createPaymentDto as unknown as QuickBooksPayment;
+
+      // If the user provided Lines, ensure the first one has a TxnId if missing
+      if (paymentData.Line && paymentData.Line.length > 0) {
+        paymentData.Line.forEach(line => {
+          if (line.LinkedTxn && line.LinkedTxn.length > 0) {
+            line.LinkedTxn.forEach(txn => {
+              if (!txn.TxnId) {
+                txn.TxnId = id;
+              }
+            });
+          }
+        });
+      }
+
+      return this.quickbooksService.createPayment(paymentData);
+    }
+
+    // Otherwise, use the convenience method to pay the full balance
+    const txnType = createPaymentDto?.Line?.[0]?.LinkedTxn?.[0]?.TxnType;
+    return this.quickbooksService.markInvoiceAsPaid(id, createPaymentDto?.TotalAmt, createPaymentDto?.PaymentRefNum, txnType);
   }
 }
 

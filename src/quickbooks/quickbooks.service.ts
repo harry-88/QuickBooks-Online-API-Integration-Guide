@@ -8,6 +8,7 @@ import {
   QuickBooksInvoice,
   QuickBooksItem,
   QuickBooksPaginatedResponse,
+  QuickBooksPayment,
   QuickBooksQueryResponse,
   QuickBooksReference,
   QuickBooksTokenResponse
@@ -837,6 +838,64 @@ export class QuickbooksService implements OnModuleInit {
       params: { operation: 'void' },
     });
     return response.data.Invoice || response.data;
+  }
+
+  async createPayment(paymentData: QuickBooksPayment): Promise<QuickBooksPayment> {
+    if (!this.realmId) {
+      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
+    }
+
+    // Ensure TxnType is valid (QuickBooks only allows Invoice or CreditMemo for Payment entity)
+    const validTxnTypes = ['Invoice', 'CreditMemo'];
+    if (paymentData.Line) {
+      paymentData.Line.forEach(line => {
+        if (line.LinkedTxn) {
+          line.LinkedTxn.forEach(txn => {
+            if (txn.TxnId) {
+              if (!txn.TxnType || !validTxnTypes.includes(txn.TxnType)) {
+                if (txn.TxnType) {
+                  this.logger.warn(`Invalid TxnType "${txn.TxnType}" provided for payment. Defaulting to "Invoice". Use PaymentMethodRef for payment methods like Stripe.`);
+                }
+                txn.TxnType = 'Invoice';
+              }
+            }
+          });
+        }
+      });
+    }
+
+    this.logger.debug(`Creating payment with body: ${JSON.stringify(paymentData)}`);
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/payment`, paymentData);
+    return response.data.Payment || response.data;
+  }
+
+  /**
+   * Mark an invoice as paid by creating a payment
+   */
+  async markInvoiceAsPaid(invoiceId: string, amount?: number, paymentRefNum?: string, txnType: string = 'Invoice'): Promise<QuickBooksPayment> {
+    // 1. Get the invoice to find the customer and balance
+    const invoice = await this.getInvoiceById(invoiceId);
+
+    const paymentAmount = amount !== undefined ? amount : invoice.Balance || invoice.TotalAmt || 0;
+
+    const paymentData: QuickBooksPayment = {
+      CustomerRef: invoice.CustomerRef,
+      TotalAmt: paymentAmount,
+      PaymentRefNum: paymentRefNum,
+      Line: [
+        {
+          Amount: paymentAmount,
+          LinkedTxn: [
+            {
+              TxnId: invoiceId,
+              TxnType: txnType as any,
+            },
+          ],
+        },
+      ],
+    };
+
+    return this.createPayment(paymentData);
   }
 }
 

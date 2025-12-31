@@ -107,6 +107,26 @@ export interface QuickBooksInvoice {
     PrintStatus?: 'NotSet' | 'NeedToPrint' | 'PrintComplete';
 }
 
+export interface QuickBooksPaymentLine {
+    Amount: number;
+    LinkedTxn: {
+        TxnId?: string;
+        TxnType?: 'Invoice' | 'CreditMemo' | 'Bill' | string;
+    }[];
+}
+
+export interface QuickBooksPayment {
+    Id?: string;
+    SyncToken?: string;
+    TotalAmt: number;
+    CustomerRef: QuickBooksReference;
+    Line?: QuickBooksPaymentLine[];
+    PaymentRefNum?: string;
+    PaymentMethodRef?: QuickBooksReference;
+    TxnDate?: string;
+    PrivateNote?: string;
+}
+
 export interface QuickBooksQueryResponse<T> {
     [key: string]: T[] | number | undefined;
     totalCount?: number;
