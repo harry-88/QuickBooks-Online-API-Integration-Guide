@@ -41,7 +41,7 @@ The endpoint automatically exchanges the code for tokens.
 curl -X POST http://localhost:3000/quickbooks/auth/refresh \
   -H "Content-Type: application/json" \
   -d '{
-    "refresh_token": "L011546037439..."
+    "QUICKBOOKS_REFRESH_TOKEN": "L011546037439..."
   }'
 ```
 

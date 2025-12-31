@@ -36,10 +36,10 @@ CREATE TABLE quickbooks_tokens (
     id SERIAL PRIMARY KEY,
     user_id INTEGER,
     access_token TEXT NOT NULL,
-    refresh_token TEXT NOT NULL,
+    QUICKBOOKS_REFRESH_TOKEN TEXT NOT NULL,
     realm_id VARCHAR(255) NOT NULL,
     access_token_expires_at TIMESTAMP NOT NULL,
-    refresh_token_issued_at TIMESTAMP NOT NULL, -- Track issue date
+    QUICKBOOKS_REFRESH_TOKEN_issued_at TIMESTAMP NOT NULL, -- Track issue date
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -85,7 +85,7 @@ async function refreshAccessTokenSafely(refreshToken: string, issuedAt: Date) {
     const response = await fetch('http://localhost:3000/quickbooks/auth/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ QUICKBOOKS_REFRESH_TOKEN: refreshToken }),
     });
     
     if (!response.ok) {
@@ -182,10 +182,10 @@ function getDaysUntilExpiration(issuedAt: Date): number {
 ```typescript
 interface TokenRecord {
   access_token: string;
-  refresh_token: string;
+  QUICKBOOKS_REFRESH_TOKEN: string;
   realmId: string;
   access_token_expires_at: Date;
-  refresh_token_issued_at: Date;
+  QUICKBOOKS_REFRESH_TOKEN_issued_at: Date;
 }
 
 class QuickBooksTokenManager {
@@ -193,20 +193,20 @@ class QuickBooksTokenManager {
     // Check if access token is expired
     if (new Date() >= tokenRecord.access_token_expires_at) {
       // Check if refresh token is still valid
-      if (this.isRefreshTokenExpired(tokenRecord.refresh_token_issued_at)) {
+      if (this.isRefreshTokenExpired(tokenRecord.QUICKBOOKS_REFRESH_TOKEN_issued_at)) {
         throw new Error('Refresh token expired. Re-authentication required.');
       }
       
       // Refresh access token
-      const newTokens = await this.refreshAccessToken(tokenRecord.refresh_token);
+      const newTokens = await this.refreshAccessToken(tokenRecord.QUICKBOOKS_REFRESH_TOKEN);
       
       // Update token record
       return {
         ...tokenRecord,
         access_token: newTokens.access_token,
-        refresh_token: newTokens.refresh_token, // May be same or new
+        QUICKBOOKS_REFRESH_TOKEN: newTokens.QUICKBOOKS_REFRESH_TOKEN, // May be same or new
         access_token_expires_at: new Date(Date.now() + newTokens.expires_in * 1000),
-        // Note: refresh_token_issued_at stays the same unless you get a new one
+        // Note: QUICKBOOKS_REFRESH_TOKEN_issued_at stays the same unless you get a new one
       };
     }
     
@@ -223,7 +223,7 @@ class QuickBooksTokenManager {
     const response = await fetch('http://localhost:3000/quickbooks/auth/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify({ QUICKBOOKS_REFRESH_TOKEN: refreshToken }),
     });
     
     if (!response.ok) {
@@ -245,7 +245,7 @@ async function dailyTokenCheck() {
   const tokens = await db.getAllTokens();
   
   for (const token of tokens) {
-    const daysUntilExpiration = getDaysUntilExpiration(token.refresh_token_issued_at);
+    const daysUntilExpiration = getDaysUntilExpiration(token.QUICKBOOKS_REFRESH_TOKEN_issued_at);
     
     if (daysUntilExpiration <= 30) {
       // Send alert

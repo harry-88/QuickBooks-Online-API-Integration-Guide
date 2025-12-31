@@ -28,7 +28,7 @@ Exchange a one-time authorization code for a full set of tokens without manual r
 ```json
 {
   "access_token": "eyJraWQiOiJ...",
-  "refresh_token": "L011546037439...",
+  "QUICKBOOKS_REFRESH_TOKEN": "L011546037439...",
   "expires_in": 3600,
   "realmId": "123146096291789",
   "message": "Tokens exchanged successfully. Store these securely."
@@ -46,7 +46,7 @@ If you already have tokens stored in your database, use this endpoint to initial
 {
   "access_token": "eyJraWQiOiJ...",
   "realmId": "123146096291789",
-  "refresh_token": "L011546037439..."
+  "QUICKBOOKS_REFRESH_TOKEN": "L011546037439..."
 }
 ```
 
@@ -59,7 +59,7 @@ Access tokens expire every **60 minutes**. Use the refresh token to obtain a new
 
 ```json
 {
-  "refresh_token": "L011546037439..."
+  "QUICKBOOKS_REFRESH_TOKEN": "L011546037439..."
 }
 ```
 
@@ -90,7 +90,7 @@ CREATE TABLE qbo_connections (
     id UUID PRIMARY KEY,
     organization_id UUID NOT NULL,
     access_token_encrypted TEXT NOT NULL,
-    refresh_token_encrypted TEXT NOT NULL,
+    QUICKBOOKS_REFRESH_TOKEN_encrypted TEXT NOT NULL,
     realm_id VARCHAR(50) NOT NULL,
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -134,7 +134,7 @@ QuickBooks Production API limits are **500 requests per minute**.
 - [README.md](README.md) - Main documentation
 - [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) - Step-by-step integration
 - [EXAMPLES.md](EXAMPLES.md) - Code examples
-- [REFRESH_TOKEN_LIFECYCLE.md](REFRESH_TOKEN_LIFECYCLE.md) - Token management deep dive
+- [QUICKBOOKS_REFRESH_TOKEN_LIFECYCLE.md](QUICKBOOKS_REFRESH_TOKEN_LIFECYCLE.md) - Token management deep dive
 
 ---
 

@@ -1,36 +1,29 @@
-import { Injectable, HttpException, HttpStatus, Logger } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
-
-export interface QuickBooksTokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
-  token_type: string;
-  realmId: string;
-}
-
-export interface QuickBooksCompanyInfo {
-  CompanyName: string;
-  LegalName: string;
-  CompanyAddr: any;
-  FiscalYearStartMonth: string;
-  Country: string;
-  Email: any;
-  WebAddr: any;
-  NameValue: any[];
-}
+import {
+  QuickBooksAccount,
+  QuickBooksCompanyInfo,
+  QuickBooksCustomer,
+  QuickBooksInvoice,
+  QuickBooksItem,
+  QuickBooksPaginatedResponse,
+  QuickBooksQueryResponse,
+  QuickBooksReference,
+  QuickBooksTokenResponse
+} from './interfaces/quickbooks.interfaces';
+import { QuickBooksHelper } from './utils/quickbooks.helper';
 
 export interface TokenStorage {
   access_token: string;
-  refresh_token: string;
+  QUICKBOOKS_REFRESH_TOKEN: string;
   realmId: string;
   expires_at?: Date;
-  refresh_token_issued_at?: Date; // Track when refresh token was issued
+  QUICKBOOKS_REFRESH_TOKEN_issued_at?: Date; // Track when refresh token was issued
 }
 
 @Injectable()
-export class QuickbooksService {
+export class QuickbooksService implements OnModuleInit {
   private readonly logger = new Logger(QuickbooksService.name);
   private readonly axiosInstance: AxiosInstance;
   private accessToken: string | null = null;
@@ -41,8 +34,8 @@ export class QuickbooksService {
 
   constructor(private configService: ConfigService) {
     const environment = this.configService.get<string>('QUICKBOOKS_ENVIRONMENT', 'sandbox');
-    this.baseUrl = environment === 'production' 
-      ? 'https://quickbooks.api.intuit.com' 
+    this.baseUrl = environment === 'production'
+      ? 'https://quickbooks.api.intuit.com'
       : 'https://sandbox-quickbooks.api.intuit.com';
 
     this.axiosInstance = axios.create({
@@ -61,17 +54,25 @@ export class QuickbooksService {
       return config;
     });
 
-    // Add response interceptor for error handling
-    this.axiosInstance.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        this.logger.error(`QuickBooks API Error: ${JSON.stringify(error.response?.data)}`);
-        throw new HttpException(
-          error.response?.data?.fault?.error?.[0]?.message || 'QuickBooks API Error',
-          error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
-        );
-      },
-    );
+    // Initialize from environment if available
+    this.refreshToken = this.configService.get<string>('QUICKBOOKS_QUICKBOOKS_REFRESH_TOKEN');
+    this.realmId = this.configService.get<string>('QUICKBOOKS_REALM_ID');
+
+    if (this.refreshToken && this.realmId) {
+      this.logger.log(`Initialized with refresh token and realm ID: ${this.realmId}`);
+    }
+  }
+
+  async onModuleInit() {
+    if (this.refreshToken && this.realmId) {
+      this.logger.log('Attempting automatic token refresh on startup...');
+      try {
+        await this.ensureValidToken();
+        this.logger.log('Automatic token refresh successful');
+      } catch (error) {
+        this.logger.error('Failed to refresh token on startup. Manual authentication may be required.');
+      }
+    }
   }
 
   /**
@@ -110,6 +111,11 @@ export class QuickbooksService {
    * Check if token is expired or about to expire (within 5 minutes)
    */
   isTokenExpired(): boolean {
+    // If we have a refresh token but no access token, consider it expired to trigger refresh
+    if (!this.accessToken && this.refreshToken) {
+      return true;
+    }
+
     if (!this.tokenExpiresAt) {
       return false; // No expiration info, assume valid
     }
@@ -138,7 +144,7 @@ export class QuickbooksService {
         this.setAccessToken(
           tokenResponse.access_token,
           tokenResponse.realmId,
-          tokenResponse.refresh_token,
+          tokenResponse.QUICKBOOKS_REFRESH_TOKEN,
           tokenResponse.expires_in,
         );
       } catch (error) {
@@ -177,7 +183,7 @@ export class QuickbooksService {
     const clientId = this.configService.get<string>('QUICKBOOKS_CLIENT_ID');
     const redirectUri = this.configService.get<string>('QUICKBOOKS_REDIRECT_URI');
     const environment = this.configService.get<string>('QUICKBOOKS_ENVIRONMENT', 'sandbox');
-    
+
     const baseAuthUrl = environment === 'production'
       ? 'https://appcenter.intuit.com/connect/oauth2'
       : 'https://appcenter.intuit.com/connect/oauth2';
@@ -230,13 +236,13 @@ export class QuickbooksService {
       this.setAccessToken(
         tokenData.access_token,
         tokenData.realmId,
-        tokenData.refresh_token,
+        tokenData.QUICKBOOKS_REFRESH_TOKEN,
         tokenData.expires_in,
       );
-      
+
       return {
         access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
+        QUICKBOOKS_REFRESH_TOKEN: tokenData.QUICKBOOKS_REFRESH_TOKEN,
         expires_in: tokenData.expires_in,
         token_type: tokenData.token_type,
         realmId: tokenData.realmId,
@@ -264,8 +270,8 @@ export class QuickbooksService {
       const response = await axios.post(
         tokenUrl,
         new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
+          grant_type: 'QUICKBOOKS_REFRESH_TOKEN',
+          QUICKBOOKS_REFRESH_TOKEN: refreshToken,
         }),
         {
           headers: {
@@ -277,17 +283,17 @@ export class QuickbooksService {
       );
 
       const tokenData = response.data;
-      const newRefreshToken = tokenData.refresh_token || refreshToken;
+      const newRefreshToken = tokenData.QUICKBOOKS_REFRESH_TOKEN || refreshToken;
       this.setAccessToken(
         tokenData.access_token,
         tokenData.realmId || this.realmId || '',
         newRefreshToken,
         tokenData.expires_in,
       );
-      
+
       return {
         access_token: tokenData.access_token,
-        refresh_token: newRefreshToken,
+        QUICKBOOKS_REFRESH_TOKEN: newRefreshToken,
         expires_in: tokenData.expires_in,
         token_type: tokenData.token_type,
         realmId: tokenData.realmId || this.realmId || '',
@@ -310,105 +316,117 @@ export class QuickbooksService {
       throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
     }
 
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    const response = await this.axiosInstance.get(`/v3/company/${this.realmId}/companyinfo/${this.realmId}`);
+    const response = await this.makeRequest('get', `/v3/company/${this.realmId}/companyinfo/${this.realmId}`);
     return response.data.QueryResponse?.CompanyInfo?.[0] || response.data;
   }
 
   /**
-   * Get all accounts (for finding IncomeAccountRef, ExpenseAccountRef, etc.)
+   * Generic method to make an API request with automatic retry on 401
    */
-  async getAccounts(maxResults: number = 100, startPosition: number = 1): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
+  private async makeRequest(
+    method: 'get' | 'post',
+    url: string,
+    data?: any,
+    config?: any,
+    isRetry: boolean = false,
+  ): Promise<any> {
     await this.ensureValidToken();
 
-    // Get accounts
-    const response = await this.axiosInstance.get(
-      `/v3/company/${this.realmId}/query`,
-      {
-        params: {
-          query: `SELECT * FROM Account MAXRESULTS ${maxResults} STARTPOSITION ${startPosition}`,
-        },
-      },
-    );
-
-    const queryResponse = response.data.QueryResponse;
-    const accounts = queryResponse.Account || [];
-
-    // Get total count using COUNT query
-    let totalCount = 0;
     try {
-      const countResponse = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT COUNT(*) FROM Account`,
-          },
-        },
-      );
-      const countData = countResponse.data.QueryResponse;
-      if (countData && countData.totalCount !== undefined) {
-        totalCount = countData.totalCount;
-      } else if (countData && countData.Account && countData.Account[0]) {
-        totalCount = parseInt(countData.Account[0].Count) || accounts.length;
+      if (method === 'get') {
+        return await this.axiosInstance.get(url, config);
       } else {
-        totalCount = accounts.length;
+        return await this.axiosInstance.post(url, data, config);
       }
     } catch (error) {
-      this.logger.warn('Failed to get total count, using array length as fallback');
-      totalCount = accounts.length;
+      // If 401 Authentication error and not already a retry
+      const statusCode = error.response?.status || error.status;
+      const isAuthError = statusCode === 401 ||
+        (error.response?.data?.Fault?.Error?.[0]?.code === '3200') ||
+        (error.response?.data?.fault?.error?.[0]?.code === '3200');
+
+      if (isAuthError && !isRetry && this.refreshToken) {
+        this.logger.log('Request failed with 401, attempting token refresh and retry...');
+        try {
+          await this.refreshAccessToken(this.refreshToken);
+          // Retry the request with isRetry = true
+          return await this.makeRequest(method, url, data, config, true);
+        } catch (refreshError) {
+          this.logger.error('Token refresh failed during retry attempt');
+          QuickBooksHelper.handleApiError(error, 'API Request (after failed refresh)');
+        }
+      }
+
+      QuickBooksHelper.handleApiError(error, `API Request ${method.toUpperCase()} ${url}`);
+    }
+  }
+
+  /**
+   * Generic method to execute a QuickBooks query with pagination and total count
+   */
+  private async executeQuery<T>(
+    entity: string,
+    maxResults: number,
+    startPosition: number,
+    where?: string,
+  ): Promise<QuickBooksPaginatedResponse<T>> {
+    const query = QuickBooksHelper.formatQuery(entity, maxResults, startPosition, where);
+    const response = await this.makeRequest('get', `/v3/company/${this.realmId}/query`, undefined, {
+      params: { query },
+    });
+
+    const queryResponse = response.data.QueryResponse as QuickBooksQueryResponse<T>;
+    const items = (queryResponse[entity] as T[]) || [];
+
+    // Get total count
+    let totalCount = 0;
+    try {
+      const countQuery = QuickBooksHelper.formatCountQuery(entity, where);
+      const countResponse = await this.makeRequest('get', `/v3/company/${this.realmId}/query`, undefined, {
+        params: { query: countQuery },
+      });
+      const countData = countResponse.data.QueryResponse;
+
+      if (countData && countData.totalCount !== undefined) {
+        totalCount = countData.totalCount;
+      } else if (countData && countData[entity] && countData[entity][0]) {
+        totalCount = parseInt(countData[entity][0].Count) || items.length;
+      } else {
+        totalCount = items.length;
+      }
+    } catch (error) {
+      this.logger.warn(`Failed to get total count for ${entity}, using array length as fallback`);
+      totalCount = items.length;
     }
 
     return {
       totalCount,
       startPosition,
       maxResults,
-      accounts,
+      items,
+    };
+  }
+
+  /**
+   * Get all accounts (for finding IncomeAccountRef, ExpenseAccountRef, etc.)
+   */
+  async getAccounts(maxResults: number = 100, startPosition: number = 1): Promise<QuickBooksPaginatedResponse<QuickBooksAccount> & { accounts: QuickBooksAccount[] }> {
+    const result = await this.executeQuery<QuickBooksAccount>('Account', maxResults, startPosition);
+    return {
+      ...result,
+      accounts: result.items,
     };
   }
 
   /**
    * Get income accounts (filtered for easier selection)
    */
-  async getIncomeAccounts(): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    try {
-      // Query for income accounts
-      const response = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Account WHERE AccountType = 'Income'`,
-          },
-        },
-      );
-
-      const queryResponse = response.data.QueryResponse;
-      const accounts = queryResponse.Account || [];
-
-      return {
-        accounts,
-        message: 'Use the Id field from these accounts as IncomeAccountRef.value when creating items',
-      };
-    } catch (error) {
-      this.logger.error(`Get income accounts error: ${JSON.stringify(error.response?.data)}`);
-      throw new HttpException(
-        'Failed to get income accounts',
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+  async getIncomeAccounts(): Promise<{ accounts: QuickBooksAccount[]; message: string }> {
+    const result = await this.executeQuery<QuickBooksAccount>('Account', 100, 1, "AccountType = 'Income'");
+    return {
+      accounts: result.items,
+      message: 'Use the Id field from these accounts as IncomeAccountRef.value when creating items',
+    };
   }
 
   /**
@@ -431,14 +449,11 @@ export class QuickbooksService {
 
     try {
       // Search for account by name (including inactive accounts)
-      const searchResponse = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Account WHERE Name = '${accountName.replace(/'/g, "''")}' AND Active IN (true, false)`,
-          },
+      const searchResponse = await this.makeRequest('get', `/v3/company/${this.realmId}/query`, undefined, {
+        params: {
+          query: `SELECT * FROM Account WHERE Name = '${accountName.replace(/'/g, "''")}' AND Active IN (true, false)`,
         },
-      );
+      });
 
       const queryResponse = searchResponse.data.QueryResponse;
       const accounts = queryResponse.Account || [];
@@ -452,7 +467,7 @@ export class QuickbooksService {
 
       // Account doesn't exist, create it
       this.logger.log(`Account not found, creating new account: ${accountName}`);
-      
+
       const accountData: any = {
         Name: accountName,
         AccountType: accountType,
@@ -464,10 +479,7 @@ export class QuickbooksService {
         accountData.AccountSubType = accountSubType;
       }
 
-      const createResponse = await this.axiosInstance.post(
-        `/v3/company/${this.realmId}/account`,
-        accountData,
-      );
+      const createResponse = await this.makeRequest('post', `/v3/company/${this.realmId}/account`, accountData);
 
       const createdAccount = createResponse.data.Account;
       if (createdAccount && createdAccount.Id) {
@@ -478,19 +490,16 @@ export class QuickbooksService {
       throw new HttpException('Failed to create account', HttpStatus.INTERNAL_SERVER_ERROR);
     } catch (error) {
       this.logger.error(`Find or create account error: ${JSON.stringify(error.response?.data)}`);
-      
+
       // If it's a duplicate name error, try to find the account again
       const errorDetail = error.response?.data?.Fault?.Error?.[0];
       if (errorDetail?.code === '6240' || errorDetail?.Message?.includes('Duplicate')) {
         this.logger.log('Duplicate account name detected, searching again...');
-        const retryResponse = await this.axiosInstance.get(
-          `/v3/company/${this.realmId}/query`,
-          {
-            params: {
-              query: `SELECT * FROM Account WHERE Name = '${accountName.replace(/'/g, "''")}' AND Active IN (true, false)`,
-            },
+        const retryResponse = await this.makeRequest('get', `/v3/company/${this.realmId}/query`, undefined, {
+          params: {
+            query: `SELECT * FROM Account WHERE Name = '${accountName.replace(/'/g, "''")}' AND Active IN (true, false)`,
           },
-        );
+        });
         const retryAccounts = retryResponse.data.QueryResponse?.Account || [];
         if (retryAccounts.length > 0) {
           return retryAccounts[0].Id;
@@ -561,139 +570,61 @@ export class QuickbooksService {
   /**
    * Get all customers
    */
-  async getCustomers(maxResults: number = 20, startPosition: number = 1): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    // Get customers
-    const response = await this.axiosInstance.get(
-      `/v3/company/${this.realmId}/query`,
-      {
-        params: {
-          query: `SELECT * FROM Customer MAXRESULTS ${maxResults} STARTPOSITION ${startPosition}`,
-        },
-      },
-    );
-
-    const queryResponse = response.data.QueryResponse;
-    const customers = queryResponse.Customer || [];
-
-    // Get total count using COUNT query
-    let totalCount = 0;
-    try {
-      const countResponse = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT COUNT(*) FROM Customer`,
-          },
-        },
-      );
-      const countData = countResponse.data.QueryResponse;
-      // QuickBooks returns count in the first row
-      if (countData && countData.totalCount !== undefined) {
-        totalCount = countData.totalCount;
-      } else if (countData && countData.Customer && countData.Customer[0]) {
-        // Sometimes count is in the Customer array
-        totalCount = parseInt(countData.Customer[0].Count) || customers.length;
-      } else {
-        // Fallback: use array length if count query fails
-        totalCount = customers.length;
-      }
-    } catch (error) {
-      // If count query fails, use array length as fallback
-      this.logger.warn('Failed to get total count, using array length as fallback');
-      totalCount = customers.length;
-    }
-
+  async getCustomers(maxResults: number = 20, startPosition: number = 1): Promise<QuickBooksPaginatedResponse<QuickBooksCustomer> & { customers: QuickBooksCustomer[] }> {
+    const result = await this.executeQuery<QuickBooksCustomer>('Customer', maxResults, startPosition);
     return {
-      totalCount,
-      startPosition,
-      maxResults,
-      customers,
+      ...result,
+      customers: result.items,
     };
   }
 
   /**
    * Get customer by ID
    */
-  async getCustomerById(customerId: string): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
+  async getCustomerById(customerId: string): Promise<QuickBooksCustomer> {
+    const result = await this.executeQuery<QuickBooksCustomer>('Customer', 1, 1, `Id = '${QuickBooksHelper.escapeQueryValue(customerId)}'`);
+    if (result.items.length === 0) {
+      throw new HttpException(`Customer with ID ${customerId} not found`, HttpStatus.NOT_FOUND);
     }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    try {
-      // QuickBooks API doesn't support GET /customers/{id}
-      // Must use QUERY endpoint with WHERE clause
-      const response = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Customer WHERE Id = '${customerId}'`,
-          },
-        },
-      );
-      
-      // QuickBooks API response structure for QUERY
-      const queryResponse = response.data.QueryResponse;
-      if (queryResponse?.Customer && queryResponse.Customer.length > 0) {
-        return queryResponse.Customer[0];
-      }
-      
-      throw new HttpException(
-        `Customer with ID ${customerId} not found`,
-        HttpStatus.NOT_FOUND,
-      );
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      
-      this.logger.error(`Get customer by ID error: ${JSON.stringify(error.response?.data)}`);
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to get customer';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+    return result.items[0];
   }
 
   /**
    * Create a new customer
    */
-  async createCustomer(customerData: any): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
+  async createCustomer(customerData: QuickBooksCustomer): Promise<QuickBooksCustomer> {
+    const requestBody = this.formatCustomerRequestBody(customerData);
+    this.logger.debug(`Creating customer with body: ${JSON.stringify(requestBody)}`);
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/customer`, requestBody);
+    return response.data.Customer || response.data;
+  }
 
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
+  /**
+   * Update a customer
+   */
+  async updateCustomer(customerId: string, customerData: QuickBooksCustomer): Promise<QuickBooksCustomer> {
+    const requestBody = {
+      ...customerData,
+      Id: customerId,
+      SyncToken: customerData.SyncToken || '0',
+    };
 
-    // QuickBooks API v3 expects customer data directly (NOT wrapped in Customer object)
-    // Format according to official documentation
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/customer`, requestBody);
+    return response.data.Customer || response.data;
+  }
+
+  /**
+   * Formats customer request body for QuickBooks API
+   */
+  private formatCustomerRequestBody(customerData: QuickBooksCustomer): any {
     const requestBody: any = {
       DisplayName: customerData.DisplayName,
     };
 
-    // Add optional fields if provided
     if (customerData.PrimaryEmailAddr) {
       requestBody.PrimaryEmailAddr = {
-        Address: typeof customerData.PrimaryEmailAddr === 'string' 
-          ? customerData.PrimaryEmailAddr 
+        Address: typeof customerData.PrimaryEmailAddr === 'string'
+          ? customerData.PrimaryEmailAddr
           : customerData.PrimaryEmailAddr.Address,
       };
     }
@@ -714,199 +645,29 @@ export class QuickbooksService {
       requestBody.Notes = customerData.Notes;
     }
 
-    try {
-      this.logger.debug(`Creating customer with body: ${JSON.stringify(requestBody)}`);
-
-      const response = await this.axiosInstance.post(
-        `/v3/company/${this.realmId}/customer`,
-        requestBody,
-      );
-
-      // QuickBooks API returns: { Customer: {...} } for create operations
-      if (response.data.Customer) {
-        return response.data.Customer;
-      }
-      
-      // Fallback formats
-      if (response.data.QueryResponse?.Customer?.[0]) {
-        return response.data.QueryResponse.Customer[0];
-      }
-      
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Create customer error: ${JSON.stringify(error.response?.data)}`);
-      this.logger.error(`Request body sent: ${JSON.stringify(requestBody)}`);
-      
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to create customer';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-          originalError: error.response?.data,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
-  }
-
-  /**
-   * Update a customer
-   */
-  async updateCustomer(customerId: string, customerData: any): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    try {
-      // QuickBooks API expects customer data directly (NOT wrapped)
-      const requestBody: any = {
-        ...customerData,
-        Id: customerId,
-        SyncToken: customerData.SyncToken || '0',
-      };
-
-      const response = await this.axiosInstance.post(
-        `/v3/company/${this.realmId}/customer`,
-        requestBody,
-      );
-
-      // QuickBooks API returns: { Customer: {...} } for update operations
-      if (response.data.Customer) {
-        return response.data.Customer;
-      }
-      
-      if (response.data.QueryResponse?.Customer?.[0]) {
-        return response.data.QueryResponse.Customer[0];
-      }
-      
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Update customer error: ${JSON.stringify(error.response?.data)}`);
-      const errorMessage = error.response?.data?.Fault?.Error?.[0]?.Message || 
-                          error.response?.data?.Fault?.Error?.[0]?.Detail ||
-                          'Failed to update customer';
-      throw new HttpException(
-        errorMessage,
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+    return requestBody;
   }
 
   /**
    * Get all invoices
    */
-  async getInvoices(maxResults: number = 20, startPosition: number = 1): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    // Get invoices
-    const response = await this.axiosInstance.get(
-      `/v3/company/${this.realmId}/query`,
-      {
-        params: {
-          query: `SELECT * FROM Invoice MAXRESULTS ${maxResults} STARTPOSITION ${startPosition}`,
-        },
-      },
-    );
-
-    const queryResponse = response.data.QueryResponse;
-    const invoices = queryResponse.Invoice || [];
-
-    // Get total count using COUNT query
-    let totalCount = 0;
-    try {
-      const countResponse = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT COUNT(*) FROM Invoice`,
-          },
-        },
-      );
-      const countData = countResponse.data.QueryResponse;
-      if (countData && countData.totalCount !== undefined) {
-        totalCount = countData.totalCount;
-      } else if (countData && countData.Invoice && countData.Invoice[0]) {
-        totalCount = parseInt(countData.Invoice[0].Count) || invoices.length;
-      } else {
-        totalCount = invoices.length;
-      }
-    } catch (error) {
-      this.logger.warn('Failed to get total count, using array length as fallback');
-      totalCount = invoices.length;
-    }
-
+  async getInvoices(maxResults: number = 20, startPosition: number = 1): Promise<QuickBooksPaginatedResponse<QuickBooksInvoice> & { invoices: QuickBooksInvoice[] }> {
+    const result = await this.executeQuery<QuickBooksInvoice>('Invoice', maxResults, startPosition);
     return {
-      totalCount,
-      startPosition,
-      maxResults,
-      invoices,
+      ...result,
+      invoices: result.items,
     };
   }
 
   /**
    * Get invoice by ID
    */
-  async getInvoiceById(invoiceId: string): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
+  async getInvoiceById(invoiceId: string): Promise<QuickBooksInvoice> {
+    const result = await this.executeQuery<QuickBooksInvoice>('Invoice', 1, 1, `Id = '${QuickBooksHelper.escapeQueryValue(invoiceId)}'`);
+    if (result.items.length === 0) {
+      throw new HttpException(`Invoice with ID ${invoiceId} not found`, HttpStatus.NOT_FOUND);
     }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    try {
-      // QuickBooks API doesn't support GET /invoices/{id}
-      // Must use QUERY endpoint with WHERE clause
-      const response = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Invoice WHERE Id = '${invoiceId}'`,
-          },
-        },
-      );
-      
-      // QuickBooks API response structure for QUERY
-      const queryResponse = response.data.QueryResponse;
-      if (queryResponse?.Invoice && queryResponse.Invoice.length > 0) {
-        return queryResponse.Invoice[0];
-      }
-      
-      throw new HttpException(
-        `Invoice with ID ${invoiceId} not found`,
-        HttpStatus.NOT_FOUND,
-      );
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      
-      this.logger.error(`Get invoice by ID error: ${JSON.stringify(error.response?.data)}`);
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to get invoice';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+    return result.items[0];
   }
 
   /**
@@ -916,9 +677,6 @@ export class QuickbooksService {
     if (!this.realmId) {
       throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
     }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
 
     // QuickBooks API expects invoice data directly (NOT wrapped)
     // Format according to official documentation
@@ -942,200 +700,41 @@ export class QuickbooksService {
       ...(invoiceData.DocNumber && { DocNumber: invoiceData.DocNumber }),
     };
 
-    try {
-      this.logger.debug(`Creating invoice with body: ${JSON.stringify(requestBody)}`);
-
-      const response = await this.axiosInstance.post(
-        `/v3/company/${this.realmId}/invoice`,
-        requestBody,
-      );
-
-      // QuickBooks API returns: { Invoice: {...} } for create operations
-      if (response.data.Invoice) {
-        return response.data.Invoice;
-      }
-      
-      if (response.data.QueryResponse?.Invoice?.[0]) {
-        return response.data.QueryResponse.Invoice[0];
-      }
-      
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Create invoice error: ${JSON.stringify(error.response?.data)}`);
-      this.logger.error(`Request body sent: ${JSON.stringify(requestBody)}`);
-      
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to create invoice';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-          originalError: error.response?.data,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+    this.logger.debug(`Creating invoice with body: ${JSON.stringify(requestBody)}`);
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/invoice`, requestBody);
+    return response.data.Invoice || response.data;
   }
 
   /**
    * Get all items
    */
-  async getItems(maxResults: number = 20, startPosition: number = 1): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    // Get items
-    const response = await this.axiosInstance.get(
-      `/v3/company/${this.realmId}/query`,
-      {
-        params: {
-          query: `SELECT * FROM Item MAXRESULTS ${maxResults} STARTPOSITION ${startPosition}`,
-        },
-      },
-    );
-
-    const queryResponse = response.data.QueryResponse;
-    const items = queryResponse.Item || [];
-
-    // Get total count using COUNT query
-    let totalCount = 0;
-    try {
-      const countResponse = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT COUNT(*) FROM Item`,
-          },
-        },
-      );
-      const countData = countResponse.data.QueryResponse;
-      if (countData && countData.totalCount !== undefined) {
-        totalCount = countData.totalCount;
-      } else if (countData && countData.Item && countData.Item[0]) {
-        totalCount = parseInt(countData.Item[0].Count) || items.length;
-      } else {
-        totalCount = items.length;
-      }
-    } catch (error) {
-      this.logger.warn('Failed to get total count, using array length as fallback');
-      totalCount = items.length;
-    }
-
-    return {
-      totalCount,
-      startPosition,
-      maxResults,
-      items,
-    };
+  async getItems(maxResults: number = 20, startPosition: number = 1): Promise<QuickBooksPaginatedResponse<QuickBooksItem>> {
+    return this.executeQuery<QuickBooksItem>('Item', maxResults, startPosition);
   }
 
   /**
    * Get item by ID
    */
-  async getItemById(itemId: string): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
+  async getItemById(itemId: string): Promise<QuickBooksItem> {
+    const result = await this.executeQuery<QuickBooksItem>('Item', 1, 1, `Id = '${QuickBooksHelper.escapeQueryValue(itemId)}'`);
+    if (result.items.length === 0) {
+      throw new HttpException(`Item with ID ${itemId} not found`, HttpStatus.NOT_FOUND);
     }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
-    try {
-      // QuickBooks API doesn't support GET /items/{id}
-      // Must use QUERY endpoint with WHERE clause
-      const response = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Item WHERE Id = '${itemId}'`,
-          },
-        },
-      );
-      
-      // QuickBooks API response structure for QUERY
-      const queryResponse = response.data.QueryResponse;
-      if (queryResponse?.Item && queryResponse.Item.length > 0) {
-        return queryResponse.Item[0];
-      }
-      
-      throw new HttpException(
-        `Item with ID ${itemId} not found`,
-        HttpStatus.NOT_FOUND,
-      );
-    } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
-      
-      this.logger.error(`Get item by ID error: ${JSON.stringify(error.response?.data)}`);
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to get item';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
-    }
+    return result.items[0];
   }
 
   /**
    * Check if an item with the given name already exists
    */
-  async findItemByName(itemName: string): Promise<any | null> {
-    if (!this.realmId) {
-      return null;
-    }
-
-    try {
-      await this.ensureValidToken();
-      
-      // Search for item by name (including inactive items)
-      const response = await this.axiosInstance.get(
-        `/v3/company/${this.realmId}/query`,
-        {
-          params: {
-            query: `SELECT * FROM Item WHERE Name = '${itemName.replace(/'/g, "''")}' AND Active IN (true, false)`,
-          },
-        },
-      );
-
-      const queryResponse = response.data.QueryResponse;
-      const items = queryResponse.Item || [];
-      
-      if (items.length > 0) {
-        return items[0];
-      }
-      
-      return null;
-    } catch (error) {
-      this.logger.warn(`Error checking for existing item: ${itemName}`);
-      return null;
-    }
+  async findItemByName(itemName: string): Promise<QuickBooksItem | null> {
+    const result = await this.executeQuery<QuickBooksItem>('Item', 1, 1, `Name = '${QuickBooksHelper.escapeQueryValue(itemName)}' AND Active IN (true, false)`);
+    return result.items.length > 0 ? result.items[0] : null;
   }
 
   /**
    * Create a new item
    */
-  async createItem(itemData: any): Promise<any> {
-    if (!this.realmId) {
-      throw new HttpException('Realm ID not set. Please authenticate first.', HttpStatus.BAD_REQUEST);
-    }
-
-    // Ensure token is valid before making API call
-    await this.ensureValidToken();
-
+  async createItem(itemData: QuickBooksItem): Promise<QuickBooksItem> {
     // Check if item with same name already exists
     const existingItem = await this.findItemByName(itemData.Name);
     if (existingItem) {
@@ -1154,7 +753,16 @@ export class QuickbooksService {
       );
     }
 
-    // Validate and format request body according to item type
+    const requestBody = await this.formatItemRequestBody(itemData);
+    this.logger.debug(`Creating item with body: ${JSON.stringify(requestBody)}`);
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/item`, requestBody);
+    return response.data.Item || response.data;
+  }
+
+  /**
+   * Formats item request body for QuickBooks API
+   */
+  private async formatItemRequestBody(itemData: QuickBooksItem): Promise<any> {
     const requestBody: any = {
       Name: itemData.Name,
       Type: itemData.Type,
@@ -1163,174 +771,72 @@ export class QuickbooksService {
       ...(itemData.Sku && { Sku: itemData.Sku }),
     };
 
-    // For Service and NonInventory items: IncomeAccountRef is REQUIRED
     if (itemData.Type === 'Service' || itemData.Type === 'NonInventory') {
       if (!itemData.IncomeAccountRef || (!itemData.IncomeAccountRef.value && !itemData.IncomeAccountRef.name)) {
-        throw new HttpException(
-          {
-            message: 'IncomeAccountRef with either value (ID) or name is required for Service and NonInventory items',
-            hint: 'Provide either account ID (value) or account name. If name is provided, account will be created if not found.',
-          },
-          HttpStatus.BAD_REQUEST,
-        );
+        throw new HttpException('IncomeAccountRef is required for Service and NonInventory items', HttpStatus.BAD_REQUEST);
       }
-      
-      // Resolve account reference (by ID or name)
-      const incomeAccountRef = await this.resolveAccountRef(
+
+      requestBody.IncomeAccountRef = await this.resolveAccountRef(
         itemData.IncomeAccountRef,
         'Income',
         itemData.Type === 'Service' ? 'ServiceIncome' : 'SalesOfProductIncome',
       );
-      requestBody.IncomeAccountRef = incomeAccountRef;
-      // Don't include ExpenseAccountRef or AssetAccountRef for Service/NonInventory items
     }
 
-    // For Inventory items: IncomeAccountRef, ExpenseAccountRef, and AssetAccountRef are REQUIRED
     if (itemData.Type === 'Inventory') {
-      if (!itemData.IncomeAccountRef || (!itemData.IncomeAccountRef.value && !itemData.IncomeAccountRef.name)) {
-        throw new HttpException(
-          {
-            message: 'IncomeAccountRef with either value (ID) or name is required for Inventory items',
-            hint: 'Provide either account ID (value) or account name. If name is provided, account will be created if not found.',
-          },
-          HttpStatus.BAD_REQUEST,
-        );
+      if (!itemData.IncomeAccountRef || !itemData.ExpenseAccountRef || !itemData.AssetAccountRef) {
+        throw new HttpException('Income, Expense, and Asset account references are required for Inventory items', HttpStatus.BAD_REQUEST);
       }
-      if (!itemData.ExpenseAccountRef || (!itemData.ExpenseAccountRef.value && !itemData.ExpenseAccountRef.name)) {
-        throw new HttpException(
-          {
-            message: 'ExpenseAccountRef with either value (ID) or name is required for Inventory items',
-            hint: 'Provide either account ID (value) or account name. If name is provided, account will be created if not found.',
-          },
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-      if (!itemData.AssetAccountRef || (!itemData.AssetAccountRef.value && !itemData.AssetAccountRef.name)) {
-        throw new HttpException(
-          {
-            message: 'AssetAccountRef with either value (ID) or name is required for Inventory items',
-            hint: 'Provide either account ID (value) or account name. If name is provided, account will be created if not found.',
-          },
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-      
-      // Resolve all account references (by ID or name)
-      const incomeAccountRef = await this.resolveAccountRef(
-        itemData.IncomeAccountRef,
-        'Income',
-        'SalesOfProductIncome',
-      );
-      const expenseAccountRef = await this.resolveAccountRef(
-        itemData.ExpenseAccountRef,
-        'Cost of Goods Sold',
-        'SuppliesMaterialsCogs',
-      );
-      const assetAccountRef = await this.resolveAccountRef(
-        itemData.AssetAccountRef,
-        'Asset',
-        'Inventory',
-      );
-      
-      requestBody.IncomeAccountRef = incomeAccountRef;
-      requestBody.ExpenseAccountRef = expenseAccountRef;
-      requestBody.AssetAccountRef = assetAccountRef;
-      
-      // Inventory items require TrackQtyOnHand to be true
+
+      requestBody.IncomeAccountRef = await this.resolveAccountRef(itemData.IncomeAccountRef, 'Income', 'SalesOfProductIncome');
+      requestBody.ExpenseAccountRef = await this.resolveAccountRef(itemData.ExpenseAccountRef, 'Cost of Goods Sold', 'SuppliesMaterialsCogs');
+      requestBody.AssetAccountRef = await this.resolveAccountRef(itemData.AssetAccountRef, 'Asset', 'Inventory');
       requestBody.TrackQtyOnHand = true;
-      
-      // Optionally set initial quantity (default to 0 if not provided)
-      if (itemData.QtyOnHand !== undefined) {
-        requestBody.QtyOnHand = itemData.QtyOnHand;
-        // InvStartDate is required when QtyOnHand is set
-        // Use provided date or default to today's date
-        if (itemData.InvStartDate) {
-          requestBody.InvStartDate = itemData.InvStartDate;
-        } else {
-          // Format today's date as YYYY-MM-DD
-          const today = new Date();
-          requestBody.InvStartDate = today.toISOString().split('T')[0];
-        }
-      } else {
-        requestBody.QtyOnHand = 0;
-        // If QtyOnHand is 0, we still need InvStartDate for inventory tracking
-        if (itemData.InvStartDate) {
-          requestBody.InvStartDate = itemData.InvStartDate;
-        } else {
-          const today = new Date();
-          requestBody.InvStartDate = today.toISOString().split('T')[0];
-        }
-      }
+      requestBody.QtyOnHand = itemData.QtyOnHand || 0;
+      requestBody.InvStartDate = itemData.InvStartDate || new Date().toISOString().split('T')[0];
     }
 
-    try {
-      this.logger.debug(`Creating item with body: ${JSON.stringify(requestBody)}`);
+    return requestBody;
+  }
 
-      const response = await this.axiosInstance.post(
-        `/v3/company/${this.realmId}/item`,
-        requestBody,
-      );
+  /**
+   * Update an existing invoice
+   */
+  async updateInvoice(invoiceId: string, updateData: QuickBooksInvoice): Promise<QuickBooksInvoice> {
+    const requestBody = {
+      ...updateData,
+      Id: invoiceId,
+      SyncToken: updateData.SyncToken,
+      sparse: updateData.sparse !== undefined ? updateData.sparse : true,
+    };
 
-      // QuickBooks API returns: { Item: {...} } for create operations
-      if (response.data.Item) {
-        return response.data.Item;
-      }
-      
-      if (response.data.QueryResponse?.Item?.[0]) {
-        return response.data.QueryResponse.Item[0];
-      }
-      
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Create item error: ${JSON.stringify(error.response?.data)}`);
-      this.logger.error(`Request body sent: ${JSON.stringify(requestBody)}`);
-      
-      const fault = error.response?.data?.Fault;
-      const errorDetail = fault?.Error?.[0];
-      
-      // Handle duplicate name error specifically
-      if (errorDetail?.code === '6240' || errorDetail?.Message?.includes('Duplicate Name')) {
-        // Extract item ID from error message if available
-        const idMatch = errorDetail?.Detail?.match(/Id=(\d+)/);
-        const existingItemId = idMatch ? idMatch[1] : null;
-        
-        throw new HttpException(
-          {
-            message: `An item with the name "${itemData.Name}" already exists in QuickBooks`,
-            code: 'DUPLICATE_ITEM_NAME',
-            existingItemId: existingItemId,
-            hint: 'Item names must be unique in QuickBooks. Please use a different name or update the existing item using PUT /quickbooks/items/:id',
-            detail: errorDetail?.Detail,
-          },
-          HttpStatus.CONFLICT,
-        );
-      }
-      
-      // Handle inventory tracking error
-      if (errorDetail?.code === '6000' && errorDetail?.Detail?.includes('Track quantity on hand')) {
-        throw new HttpException(
-          {
-            message: 'Inventory items require quantity tracking to be enabled',
-            code: 'INVENTORY_TRACKING_REQUIRED',
-            detail: errorDetail?.Detail,
-            hint: 'For Inventory items, TrackQtyOnHand must be true. This is automatically set when creating Inventory items.',
-          },
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-      
-      const errorMessage = errorDetail?.Detail || errorDetail?.Message || 'Failed to create item';
-      
-      throw new HttpException(
-        {
-          message: errorMessage,
-          code: errorDetail?.code,
-          detail: errorDetail?.Detail,
-          originalError: error.response?.data,
-        },
-        error.response?.status || HttpStatus.BAD_REQUEST,
-      );
+    if (updateData.Line) {
+      requestBody.Line = updateData.Line.map((line, index) => ({
+        ...line,
+        LineNum: line.LineNum || index + 1,
+      }));
     }
+
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/invoice`, requestBody, {
+      params: { operation: 'update' },
+    });
+    return response.data.Invoice || response.data;
+  }
+
+  /**
+   * Void an existing invoice
+   */
+  async voidInvoice(invoiceId: string, syncToken: string): Promise<QuickBooksInvoice> {
+    const requestBody = {
+      Id: invoiceId,
+      SyncToken: syncToken,
+      sparse: true,
+    };
+
+    const response = await this.makeRequest('post', `/v3/company/${this.realmId}/invoice`, requestBody, {
+      params: { operation: 'void' },
+    });
+    return response.data.Invoice || response.data;
   }
 }
 

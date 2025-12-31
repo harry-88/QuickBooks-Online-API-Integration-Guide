@@ -148,7 +148,7 @@ Explore our detailed sub-guides for specific implementation details:
 - 📘 [Integration Guide](INTEGRATION_GUIDE.md): Step-by-step walkthrough.
 - 📗 [Authorization Options](AUTHORIZATION_OPTIONS.md): Deep dive into OAuth methods.
 - 📙 [Code Examples](EXAMPLES.md): Practical snippets for common tasks.
-- 📕 [Token Lifecycle](REFRESH_TOKEN_LIFECYCLE.md): Understanding token expiration.
+- 📕 [Token Lifecycle](QUICKBOOKS_REFRESH_TOKEN_LIFECYCLE.md): Understanding token expiration.
 
 ---
 

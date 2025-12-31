@@ -22,14 +22,21 @@ import { QuickbooksService } from './quickbooks.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { CreateItemDto } from './dto/create-item.dto';
+import { UpdateInvoiceDto, VoidInvoiceDto } from './dto/update-invoice.dto';
 import { ExchangeCodeDto, RefreshTokenDto, SetTokenDto } from './dto/token-management.dto';
 import { AuthTokenInterceptor } from './interceptors/auth-token.interceptor';
+import {
+  QuickBooksCustomer,
+  QuickBooksInvoice,
+  QuickBooksItem,
+  QuickBooksPaginatedResponse
+} from './interfaces/quickbooks.interfaces';
 
 @ApiTags('QuickBooks')
 @Controller('quickbooks')
 @UseInterceptors(AuthTokenInterceptor)
 export class QuickbooksController {
-  constructor(private readonly quickbooksService: QuickbooksService) {}
+  constructor(private readonly quickbooksService: QuickbooksService) { }
 
   @Post('auth/refresh')
   @HttpCode(HttpStatus.OK)
@@ -45,7 +52,7 @@ export class QuickbooksController {
       type: 'object',
       properties: {
         access_token: { type: 'string' },
-        refresh_token: { type: 'string' },
+        QUICKBOOKS_REFRESH_TOKEN: { type: 'string' },
         expires_in: { type: 'number' },
         token_type: { type: 'string' },
         realmId: { type: 'string' },
@@ -55,7 +62,7 @@ export class QuickbooksController {
   @ApiResponse({ status: 400, description: 'Invalid refresh token' })
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto) {
     const tokenResponse = await this.quickbooksService.refreshAccessToken(
-      refreshTokenDto.refresh_token,
+      refreshTokenDto.QUICKBOOKS_REFRESH_TOKEN,
     );
     return {
       ...tokenResponse,
@@ -80,7 +87,7 @@ export class QuickbooksController {
       type: 'object',
       properties: {
         access_token: { type: 'string' },
-        refresh_token: { type: 'string' },
+        QUICKBOOKS_REFRESH_TOKEN: { type: 'string' },
         expires_in: { type: 'number' },
         token_type: { type: 'string' },
         realmId: { type: 'string' },
@@ -93,13 +100,13 @@ export class QuickbooksController {
     const tokenResponse = await this.quickbooksService.exchangeCodeForToken(
       exchangeCodeDto.code,
     );
-    
+
     // If realmId is provided, use it; otherwise use from response
     const realmId = exchangeCodeDto.realmId || tokenResponse.realmId;
     this.quickbooksService.setAccessToken(
       tokenResponse.access_token,
       realmId,
-      tokenResponse.refresh_token,
+      tokenResponse.QUICKBOOKS_REFRESH_TOKEN,
       tokenResponse.expires_in,
     );
 
@@ -142,7 +149,7 @@ export class QuickbooksController {
     this.quickbooksService.setAccessToken(
       setTokenDto.access_token,
       setTokenDto.realmId,
-      setTokenDto.refresh_token,
+      setTokenDto.QUICKBOOKS_REFRESH_TOKEN,
     );
 
     const status = this.quickbooksService.getTokenStatus();
@@ -314,8 +321,8 @@ export class QuickbooksController {
     description: 'Customer created successfully',
   })
   @ApiResponse({ status: 400, description: 'Invalid customer data' })
-  async createCustomer(@Body() createCustomerDto: CreateCustomerDto) {
-    return this.quickbooksService.createCustomer(createCustomerDto);
+  async createCustomer(@Body() createCustomerDto: CreateCustomerDto): Promise<QuickBooksCustomer> {
+    return this.quickbooksService.createCustomer(createCustomerDto as QuickBooksCustomer);
   }
 
   @Post('customers/:id')
@@ -337,8 +344,8 @@ export class QuickbooksController {
   async updateCustomer(
     @Param('id') id: string,
     @Body() updateCustomerDto: CreateCustomerDto,
-  ) {
-    return this.quickbooksService.updateCustomer(id, updateCustomerDto);
+  ): Promise<QuickBooksCustomer> {
+    return this.quickbooksService.updateCustomer(id, updateCustomerDto as QuickBooksCustomer);
   }
 
   @Get('invoices')
@@ -407,8 +414,54 @@ export class QuickbooksController {
     description: 'Invoice created successfully',
   })
   @ApiResponse({ status: 400, description: 'Invalid invoice data' })
-  async createInvoice(@Body() createInvoiceDto: CreateInvoiceDto) {
-    return this.quickbooksService.createInvoice(createInvoiceDto);
+  async createInvoice(@Body() createInvoiceDto: CreateInvoiceDto): Promise<QuickBooksInvoice> {
+    return this.quickbooksService.createInvoice(createInvoiceDto as QuickBooksInvoice);
+  }
+
+  @Post('invoices/:id/void')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Void an invoice',
+    description: 'Voids an existing invoice in QuickBooks. This sets the invoice amount to zero but keeps the record.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'QuickBooks invoice ID',
+    example: '1',
+  })
+  @ApiBody({ type: VoidInvoiceDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Invoice voided successfully',
+  })
+  async voidInvoice(
+    @Param('id') id: string,
+    @Body() voidInvoiceDto: VoidInvoiceDto,
+  ): Promise<QuickBooksInvoice> {
+    return this.quickbooksService.voidInvoice(id, voidInvoiceDto.SyncToken);
+  }
+
+  @Post('invoices/:id')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Update an invoice',
+    description: 'Updates an existing invoice in QuickBooks. Use sparse=true (default) to only update provided fields.',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'QuickBooks invoice ID',
+    example: '1',
+  })
+  @ApiBody({ type: UpdateInvoiceDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Invoice updated successfully',
+  })
+  async updateInvoice(
+    @Param('id') id: string,
+    @Body() updateInvoiceDto: UpdateInvoiceDto,
+  ): Promise<QuickBooksInvoice> {
+    return this.quickbooksService.updateInvoice(id, updateInvoiceDto as unknown as QuickBooksInvoice);
   }
 
   @Get('items')
@@ -479,8 +532,8 @@ export class QuickbooksController {
     description: 'Item created successfully',
   })
   @ApiResponse({ status: 400, description: 'Invalid item data' })
-  async createItem(@Body() createItemDto: CreateItemDto) {
-    return this.quickbooksService.createItem(createItemDto);
+  async createItem(@Body() createItemDto: CreateItemDto): Promise<QuickBooksItem> {
+    return this.quickbooksService.createItem(createItemDto as unknown as QuickBooksItem);
   }
 }
 

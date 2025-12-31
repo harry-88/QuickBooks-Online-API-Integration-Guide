@@ -74,7 +74,7 @@ The callback endpoint automatically exchanges the code for tokens. You'll receiv
 ```json
 {
   "access_token": "eyJraWQiOiJ...",
-  "refresh_token": "L011546037439...",
+  "QUICKBOOKS_REFRESH_TOKEN": "L011546037439...",
   "expires_in": 3600,
   "token_type": "bearer",
   "realmId": "123146096291789"
@@ -178,7 +178,7 @@ curl -X POST \
   http://localhost:3000/quickbooks/auth/refresh \
   -H "Content-Type: application/json" \
   -d '{
-    "refresh_token": "YOUR_REFRESH_TOKEN"
+    "QUICKBOOKS_REFRESH_TOKEN": "YOUR_QUICKBOOKS_REFRESH_TOKEN"
   }'
 ```
 
@@ -203,7 +203,7 @@ async handleCallback(code: string, realmId: string) {
   await this.tokenRepository.save({
     userId: currentUser.id,
     accessToken: tokens.access_token,
-    refreshToken: tokens.refresh_token,
+    refreshToken: tokens.QUICKBOOKS_REFRESH_TOKEN,
     realmId: tokens.realmId,
     expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
   });
