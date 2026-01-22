@@ -9,6 +9,7 @@ import {
   HttpStatus,
   UseInterceptors,
   Patch,
+  HttpException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -40,6 +41,147 @@ import {
 @UseInterceptors(AuthTokenInterceptor)
 export class QuickbooksController {
   constructor(private readonly quickbooksService: QuickbooksService) { }
+
+  @Get('auth/authorize')
+  @ApiOperation({
+    summary: 'Get OAuth authorization URL',
+    description:
+      'Returns the Intuit OAuth authorization URL. ' +
+      'Redirect the user to this URL to start the OAuth flow. ' +
+      'After authorization, QuickBooks will redirect to the callback URL with an authorization code.',
+  })
+  @ApiQuery({
+    name: 'state',
+    description: 'Optional state parameter for OAuth flow security',
+    required: false,
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Authorization URL generated successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        authorizationUrl: { type: 'string' },
+        message: { type: 'string' },
+      },
+    },
+  })
+  getAuthorizationUrl(@Query('state') state?: string) {
+    const authorizationUrl = this.quickbooksService.getAuthorizationUrl(state);
+    return {
+      authorizationUrl,
+      message: 'Redirect user to this URL for authorization',
+    };
+  }
+
+  @Get('auth/callback')
+  @ApiOperation({
+    summary: 'OAuth callback endpoint',
+    description:
+      'Handles the OAuth callback from QuickBooks. ' +
+      'This endpoint automatically exchanges the authorization code for access and refresh tokens. ' +
+      'QuickBooks redirects here after user authorization.',
+  })
+  @ApiQuery({
+    name: 'code',
+    description: 'Authorization code from QuickBooks',
+    required: true,
+    type: String,
+  })
+  @ApiQuery({
+    name: 'realmId',
+    description: 'Realm ID (company ID) from QuickBooks',
+    required: true,
+    type: String,
+  })
+  @ApiQuery({
+    name: 'state',
+    description: 'State parameter (if provided in authorize request)',
+    required: false,
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Tokens exchanged successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        access_token: { type: 'string' },
+        refresh_token: { type: 'string' },
+        expires_in: { type: 'number' },
+        token_type: { type: 'string' },
+        realmId: { type: 'string' },
+        message: { type: 'string' },
+      },
+    },
+  })
+  @ApiQuery({
+    name: 'error',
+    description: 'Error code from QuickBooks (if authorization failed)',
+    required: false,
+    type: String,
+  })
+  @ApiQuery({
+    name: 'error_description',
+    description: 'Error description from QuickBooks',
+    required: false,
+    type: String,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid authorization code or missing parameters' })
+  async handleCallback(
+    @Query('code') code: string,
+    @Query('realmId') realmId: string,
+    @Query('state') _state?: string,
+    @Query('error') error?: string,
+    @Query('error_description') errorDescription?: string,
+  ) {
+    // Handle OAuth errors from QuickBooks
+    if (error) {
+      const decodedErrorDescription = errorDescription 
+        ? decodeURIComponent(errorDescription.replace(/\+/g, ' '))
+        : 'Unknown error';
+      
+      throw new HttpException(
+        {
+          message: `OAuth authorization failed: ${error}`,
+          error,
+          error_description: decodedErrorDescription,
+          hint: 'Check your app configuration in QuickBooks Developer Portal. Ensure scopes are correctly configured.',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!code) {
+      throw new HttpException(
+        {
+          message: 'Authorization code is required',
+          hint: 'QuickBooks did not return an authorization code. Check if the user granted permissions.',
+        },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const tokenResponse = await this.quickbooksService.exchangeCodeForToken(code);
+
+    // Use realmId from query parameter (from QuickBooks redirect) or from token response
+    const finalRealmId = realmId || tokenResponse.realmId;
+    
+    // Set tokens in service
+    this.quickbooksService.setAccessToken(
+      tokenResponse.access_token,
+      finalRealmId,
+      tokenResponse.refresh_token,
+      tokenResponse.expires_in,
+    );
+
+    return {
+      ...tokenResponse,
+      realmId: finalRealmId,
+      message: 'Authorization successful! Store these tokens securely in your database.',
+    };
+  }
 
   @Post('auth/refresh')
   @HttpCode(HttpStatus.OK)

@@ -179,6 +179,7 @@ export class QuickbooksService implements OnModuleInit {
 
   /**
    * Get OAuth authorization URL
+   * Note: QuickBooks requires the state parameter for security (CSRF protection)
    */
   getAuthorizationUrl(state?: string): string {
     const clientId = this.configService.get<string>('QUICKBOOKS_CLIENT_ID');
@@ -189,20 +190,37 @@ export class QuickbooksService implements OnModuleInit {
       ? 'https://appcenter.intuit.com/connect/oauth2'
       : 'https://appcenter.intuit.com/connect/oauth2';
 
-    const scopes = [
-      'com.intuit.quickbooks.accounting',
-      'com.intuit.quickbooks.payment',
-    ].join(' ');
+    // QuickBooks OAuth scopes
+    // Note: Only include scopes that are enabled in your QuickBooks app settings
+    // If you get "invalid_scope" error, check your app configuration in QuickBooks Developer Portal
+    const enabledScopes = this.configService.get<string>('QUICKBOOKS_SCOPES');
+    const scopes = enabledScopes 
+      ? enabledScopes 
+      : 'com.intuit.quickbooks.accounting'; // Default to accounting only (most common)
+
+    // Generate state if not provided (required by QuickBooks for CSRF protection)
+    const stateValue = state || this.generateState();
 
     const params = new URLSearchParams({
       client_id: clientId,
       response_type: 'code',
       scope: scopes,
       redirect_uri: redirectUri,
-      ...(state && { state }),
+      state: stateValue,
     });
 
     return `${baseAuthUrl}?${params.toString()}`;
+  }
+
+  /**
+   * Generate a random state value for OAuth CSRF protection
+   */
+  private generateState(): string {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 15);
+    const stateString = `${timestamp}-${random}`;
+    // Use base64 encoding and replace URL-unsafe characters
+    return Buffer.from(stateString).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   }
 
   /**
@@ -371,6 +389,13 @@ export class QuickbooksService implements OnModuleInit {
     startPosition: number,
     where?: string,
   ): Promise<QuickBooksPaginatedResponse<T>> {
+    if (!this.realmId) {
+      throw new HttpException(
+        'Realm ID not set. Please authenticate first or provide realmId in query parameter/body.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     const query = QuickBooksHelper.formatQuery(entity, maxResults, startPosition, where);
     const response = await this.makeRequest('get', `/v3/company/${this.realmId}/query`, undefined, {
       params: { query },
